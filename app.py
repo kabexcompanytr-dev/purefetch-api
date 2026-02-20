@@ -5,6 +5,8 @@ import os
 import shutil
 import subprocess
 import uuid
+import threading
+import time
 
 app = Flask(__name__)
 CORS(app)
@@ -16,6 +18,17 @@ FFMPEG_PATH = 'C:/ffmpeg/bin/ffmpeg.exe' if os.name == 'nt' else shutil.which('f
 DOWNLOAD_FOLDER = 'downloads'
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
+
+# TEMİZLİKÇİ FONKSİSYON: Dosyayı gönderdikten sonra sunucudan siler
+def delete_later(file_path):
+    """5 dakika sonra dosyayı siler, böylece sunucu diski dolmaz."""
+    time.sleep(300) 
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            print(f"Sunucu temizlendi: {file_path}")
+    except Exception as e:
+        print(f"Temizlik hatası: {e}")
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
@@ -43,7 +56,7 @@ def analyze():
                             "ext": "mp4",
                             "format_id": f.get('format_id'),
                             "type": "video",
-                            "watermark": not is_premium # Premium değilse filigran uyarısı
+                            "watermark": not is_premium 
                         })
                         seen_resolutions.add(res)
 
@@ -51,7 +64,7 @@ def analyze():
                 "title": info.get('title') or "PureFetch Video",
                 "thumbnail": info.get('thumbnail'),
                 "formats": formats_list,
-                "original_url": url # İndirme işlemi için saklıyoruz
+                "original_url": url
             })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -67,7 +80,6 @@ def download_processed():
     output_filename = f"purefetch_{unique_id}.mp4"
     output_path = os.path.join(DOWNLOAD_FOLDER, output_filename)
 
-    # 1. YT-DLP ile indir
     ydl_opts = {
         'format': f"{format_id}+bestaudio/best",
         'outtmpl': output_path,
@@ -76,23 +88,27 @@ def download_processed():
     }
 
     try:
+        # 1. Videoyu indir
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        # 2. Eğer Premium DEĞİLSE Filigran Ekle
+        # 2. ÜCRETSİZ KULLANICI REKLAMI (Filigran)
         if not is_premium:
             temp_output = output_path.replace(".mp4", "_wm.mp4")
-            # FFmpeg komutu: Sağ alta PureFetch yazar
+            # Filigran: Sağ alta 'PureFetch' yazar (Marka reklamın)
             cmd = [
                 FFMPEG_PATH, '-i', output_path,
-                '-vf', "drawtext=text='PureFetch':x=main_w-tw-10:y=main_h-th-10:fontsize=24:fontcolor=white@0.5",
+                '-vf', "drawtext=text='PureFetch':x=main_w-tw-15:y=main_h-th-15:fontsize=30:fontcolor=white@0.6",
                 '-codec:a', 'copy', temp_output
             ]
             subprocess.run(cmd)
             os.remove(output_path)
             os.rename(temp_output, output_path)
 
-        # 3. Dosyayı kullanıcıya gönder
+        # 3. Arka planda temizlik işlemini başlat (5 dk sonra sil)
+        threading.Thread(target=delete_later, args=(output_path,)).start()
+
+        # 4. Dosyayı gönder
         return send_file(output_path, as_attachment=True)
 
     except Exception as e:
