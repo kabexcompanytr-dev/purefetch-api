@@ -7,28 +7,30 @@ import subprocess
 import uuid
 import threading
 import time
+import logging
 
 app = Flask(__name__)
 CORS(app)
 
-# ORTAM KONTROLÜ
+# Log kayıtlarını Koyeb panelinde görebilmek için
+logging.basicConfig(level=logging.INFO)
+
+# ORTAM KONTROLÜ: Windows ise manuel yol, Linux/Koyeb ise sistem yolu
 FFMPEG_PATH = 'C:/ffmpeg/bin/ffmpeg.exe' if os.name == 'nt' else shutil.which('ffmpeg')
 
-# Videoların geçici olarak kaydedileceği klasör
 DOWNLOAD_FOLDER = 'downloads'
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
-# TEMİZLİKÇİ FONKSİSYON: Dosyayı gönderdikten sonra sunucudan siler
 def delete_later(file_path):
-    """5 dakika sonra dosyayı siler, böylece sunucu diski dolmaz."""
+    """5 dakika sonra dosyayı siler."""
     time.sleep(300) 
     try:
         if os.path.exists(file_path):
             os.remove(file_path)
-            print(f"Sunucu temizlendi: {file_path}")
+            logging.info(f"Sunucu temizlendi: {file_path}")
     except Exception as e:
-        print(f"Temizlik hatası: {e}")
+        logging.error(f"Temizlik hatası: {e}")
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
@@ -39,7 +41,12 @@ def analyze():
     if not url:
         return jsonify({"error": "URL gerekli"}), 400
 
-    ydl_opts = {'quiet': True, 'no_warnings': True, 'ffmpeg_location': FFMPEG_PATH}
+    ydl_opts = {
+        'quiet': True, 
+        'no_warnings': True, 
+        'ffmpeg_location': FFMPEG_PATH,
+        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None # YouTube kısıtlamaları için
+    }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -49,6 +56,7 @@ def analyze():
             
             for f in info.get('formats', []):
                 res = f.get('height')
+                # Sadece ses içerenleri ele, video ve yüksekliği olanları al
                 if f.get('vcodec') != 'none' and res:
                     if res in [360, 720, 1080] and res not in seen_resolutions:
                         formats_list.append({
@@ -84,7 +92,8 @@ def download_processed():
         'format': f"{format_id}+bestaudio/best",
         'outtmpl': output_path,
         'ffmpeg_location': FFMPEG_PATH,
-        'merge_output_format': 'mp4'
+        'merge_output_format': 'mp4',
+        'postprocessor_args': ['-c:v', 'libx264', '-preset', 'veryfast']
     }
 
     try:
@@ -92,28 +101,30 @@ def download_processed():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        # 2. ÜCRETSİZ KULLANICI REKLAMI (Filigran)
+        # 2. ÜCRETSİZ KULLANICI FİLİGRANI
         if not is_premium:
             temp_output = output_path.replace(".mp4", "_wm.mp4")
-            # Filigran: Sağ alta 'PureFetch' yazar (Marka reklamın)
+            # Linux sunucularda font hatası almamak için fontconfig kullanılır
             cmd = [
-                FFMPEG_PATH, '-i', output_path,
-                '-vf', "drawtext=text='PureFetch':x=main_w-tw-15:y=main_h-th-15:fontsize=30:fontcolor=white@0.6",
+                FFMPEG_PATH, '-y', '-i', output_path,
+                '-vf', "drawtext=text='PureFetch':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.5",
                 '-codec:a', 'copy', temp_output
             ]
-            subprocess.run(cmd)
-            os.remove(output_path)
-            os.rename(temp_output, output_path)
+            subprocess.run(cmd, check=True)
+            if os.path.exists(temp_output):
+                os.remove(output_path)
+                os.rename(temp_output, output_path)
 
-        # 3. Arka planda temizlik işlemini başlat (5 dk sonra sil)
+        # 3. Temizlik
         threading.Thread(target=delete_later, args=(output_path,)).start()
 
-        # 4. Dosyayı gönder
         return send_file(output_path, as_attachment=True)
 
     except Exception as e:
+        logging.error(f"Download Error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+# Koyeb için Port Ayarı
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 8080))
     app.run(debug=False, host='0.0.0.0', port=port)
