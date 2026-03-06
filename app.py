@@ -15,8 +15,8 @@ CORS(app)
 logging.basicConfig(level=logging.INFO)
 
 FFMPEG_PATH = 'C:/ffmpeg/bin/ffmpeg.exe' if os.name == 'nt' else shutil.which('ffmpeg')
-
 DOWNLOAD_FOLDER = 'downloads'
+
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
@@ -38,15 +38,24 @@ def analyze():
     if not url:
         return jsonify({"error": "URL gerekli"}), 400
 
-    # YouTube kısıtlamalarını aşmak için yeni seçenekler eklendi
+    # EN KRİTİK AYARLAR: YouTube ve FB engellerini aşmak için
     ydl_opts = {
         'quiet': True, 
         'no_warnings': True, 
         'ffmpeg_location': FFMPEG_PATH,
-        'geo_bypass': True,  # Bölge kısıtlamasını aşmaya çalış
-        'geo_bypass_country': 'TR', # Türkiye üzerinden erişiyormuş gibi yap
-        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
+        'geo_bypass': True,
+        'geo_bypass_country': 'TR',
+        'nocheckcertificate': True,
+        # İnsan gibi davranma taktikleri
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'referer': 'https://www.youtube.com/',
+        'http_headers': {
+            'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+        },
+        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
+        # Facebook ve TikTok için ekstra
+        'extract_flat': False,
+        'force_generic_extractor': False
     }
 
     try:
@@ -55,18 +64,37 @@ def analyze():
             formats_list = []
             seen_resolutions = set()
             
-            for f in info.get('formats', []):
-                res = f.get('height')
+            # Gelen tüm formatları daha dikkatli tara (Facebook için optimize edildi)
+            formats = info.get('formats', [])
+            if not formats: # Bazı platformlarda formats yerine entries gelebilir
+                formats = info.get('entries', [])
+
+            for f in formats:
+                # Hem height (YouTube) hem de format_note (Facebook HD/SD) kontrolü
+                res = f.get('height') or f.get('format_note')
                 if f.get('vcodec') != 'none' and res:
-                    if res in [360, 720, 1080] and res not in seen_resolutions:
+                    # Kalite etiketini düzelt
+                    quality_label = f"{res}p" if isinstance(res, int) else str(res)
+                    
+                    if quality_label not in seen_resolutions:
                         formats_list.append({
-                            "quality": f"{res}p",
+                            "quality": quality_label,
                             "ext": "mp4",
                             "format_id": f.get('format_id'),
                             "type": "video",
                             "watermark": not is_premium 
                         })
-                        seen_resolutions.add(res)
+                        seen_resolutions.add(quality_label)
+
+            # Eğer liste hala boşsa (FB bazen height göndermez), en iyi formatı ekle
+            if not formats_list:
+                formats_list.append({
+                    "quality": "Standart Kalite",
+                    "ext": "mp4",
+                    "format_id": "best",
+                    "type": "video",
+                    "watermark": not is_premium
+                })
 
             return jsonify({
                 "title": info.get('title') or "PureFetch Video",
@@ -90,7 +118,7 @@ def download_processed():
     output_path = os.path.join(DOWNLOAD_FOLDER, output_filename)
 
     ydl_opts = {
-        'format': f"{format_id}+bestaudio/best",
+        'format': f"{format_id}+bestaudio/best" if format_id != "best" else "best",
         'outtmpl': output_path,
         'ffmpeg_location': FFMPEG_PATH,
         'merge_output_format': 'mp4',
@@ -124,4 +152,4 @@ def download_processed():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
-    app.run(debug=False, host='0.0.0.0', port=port) 
+    app.run(debug=False, host='0.0.0.0', port=port)
