@@ -12,10 +12,8 @@ import logging
 app = Flask(__name__)
 CORS(app)
 
-# Log kayıtlarını Koyeb panelinde görebilmek için
 logging.basicConfig(level=logging.INFO)
 
-# ORTAM KONTROLÜ: Windows ise manuel yol, Linux/Koyeb ise sistem yolu
 FFMPEG_PATH = 'C:/ffmpeg/bin/ffmpeg.exe' if os.name == 'nt' else shutil.which('ffmpeg')
 
 DOWNLOAD_FOLDER = 'downloads'
@@ -23,7 +21,6 @@ if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
 def delete_later(file_path):
-    """5 dakika sonra dosyayı siler."""
     time.sleep(300) 
     try:
         if os.path.exists(file_path):
@@ -41,11 +38,15 @@ def analyze():
     if not url:
         return jsonify({"error": "URL gerekli"}), 400
 
+    # YouTube kısıtlamalarını aşmak için yeni seçenekler eklendi
     ydl_opts = {
         'quiet': True, 
         'no_warnings': True, 
         'ffmpeg_location': FFMPEG_PATH,
-        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None # YouTube kısıtlamaları için
+        'geo_bypass': True,  # Bölge kısıtlamasını aşmaya çalış
+        'geo_bypass_country': 'TR', # Türkiye üzerinden erişiyormuş gibi yap
+        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     }
 
     try:
@@ -56,7 +57,6 @@ def analyze():
             
             for f in info.get('formats', []):
                 res = f.get('height')
-                # Sadece ses içerenleri ele, video ve yüksekliği olanları al
                 if f.get('vcodec') != 'none' and res:
                     if res in [360, 720, 1080] and res not in seen_resolutions:
                         formats_list.append({
@@ -75,6 +75,7 @@ def analyze():
                 "original_url": url
             })
     except Exception as e:
+        logging.error(f"Analyze Error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/download-processed', methods=['POST'])
@@ -93,18 +94,17 @@ def download_processed():
         'outtmpl': output_path,
         'ffmpeg_location': FFMPEG_PATH,
         'merge_output_format': 'mp4',
+        'geo_bypass': True,
+        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
         'postprocessor_args': ['-c:v', 'libx264', '-preset', 'veryfast']
     }
 
     try:
-        # 1. Videoyu indir
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        # 2. ÜCRETSİZ KULLANICI FİLİGRANI
         if not is_premium:
             temp_output = output_path.replace(".mp4", "_wm.mp4")
-            # Linux sunucularda font hatası almamak için fontconfig kullanılır
             cmd = [
                 FFMPEG_PATH, '-y', '-i', output_path,
                 '-vf', "drawtext=text='PureFetch':x=w-tw-20:y=h-th-20:fontsize=24:fontcolor=white@0.5",
@@ -115,16 +115,13 @@ def download_processed():
                 os.remove(output_path)
                 os.rename(temp_output, output_path)
 
-        # 3. Temizlik
         threading.Thread(target=delete_later, args=(output_path,)).start()
-
         return send_file(output_path, as_attachment=True)
 
     except Exception as e:
         logging.error(f"Download Error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-# Koyeb için Port Ayarı
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     app.run(debug=False, host='0.0.0.0', port=port)
