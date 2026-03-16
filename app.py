@@ -39,14 +39,19 @@ def analyze():
     if not url:
         return jsonify({"error": "URL gerekli"}), 400
 
+    # KRİTİK: Bölge engellerini aşmak için eklenen yeni ayarlar
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
         'ffmpeg_location': FFMPEG_PATH,
         'geo_bypass': True,
+        'geo_bypass_country': 'TR',  # Sunucuyu Türkiye'deymiş gibi simüle et
         'nocheckcertificate': True,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
+        'http_headers': {
+            'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+        }
     }
 
     try:
@@ -58,7 +63,6 @@ def analyze():
             formats = info.get('formats', [])
             for f in formats:
                 res = f.get('height') or f.get('format_note')
-                # Sadece video içerenleri al
                 if f.get('vcodec') != 'none' and res:
                     quality_label = f"{res}p" if isinstance(res, int) else str(res)
                     if quality_label not in seen_resolutions:
@@ -80,6 +84,7 @@ def analyze():
                 "original_url": url
             })
     except Exception as e:
+        logging.error(f"Analiz Hatası: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/download-processed', methods=['POST'])
@@ -92,7 +97,6 @@ def download_processed():
     unique_id = str(uuid.uuid4())[:8]
     output_path = os.path.join(DOWNLOAD_FOLDER, f"purefetch_{unique_id}.mp4")
 
-    # YouTube ise birleştirme yap, değilse (FB/Insta) direkt formatı çek
     is_youtube = "youtube.com" in url or "youtu.be" in url
     final_format = f"{format_id}+bestaudio/best" if is_youtube and format_id != "best" else format_id
 
@@ -101,6 +105,8 @@ def download_processed():
         'outtmpl': output_path,
         'ffmpeg_location': FFMPEG_PATH,
         'merge_output_format': 'mp4',
+        'geo_bypass': True,
+        'geo_bypass_country': 'TR',
         'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
         'postprocessor_args': ['-c:v', 'libx264', '-preset', 'ultrafast']
     }
@@ -122,6 +128,7 @@ def download_processed():
         threading.Thread(target=delete_later, args=(output_path,)).start()
         return send_file(output_path, as_attachment=True)
     except Exception as e:
+        logging.error(f"İndirme Hatası: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
