@@ -39,13 +39,12 @@ def analyze():
     if not url:
         return jsonify({"error": "URL gerekli"}), 400
 
-    # KRİTİK: Bölge engellerini aşmak için eklenen yeni ayarlar
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
         'ffmpeg_location': FFMPEG_PATH,
         'geo_bypass': True,
-        'geo_bypass_country': 'TR',  # Sunucuyu Türkiye'deymiş gibi simüle et
+        'geo_bypass_country': 'TR',
         'nocheckcertificate': True,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
@@ -97,8 +96,16 @@ def download_processed():
     unique_id = str(uuid.uuid4())[:8]
     output_path = os.path.join(DOWNLOAD_FOLDER, f"purefetch_{unique_id}.mp4")
 
+    # YOUTUBE FORMAT MANTIĞI GÜNCELLENDİ (Fallback mekanizması)
     is_youtube = "youtube.com" in url or "youtu.be" in url
-    final_format = f"{format_id}+bestaudio/best" if is_youtube and format_id != "best" else format_id
+    
+    if is_youtube:
+        # 1. Seçim: Seçilen ID + En iyi ses
+        # 2. Seçim (Slash sonrası): Eğer 1 yoksa, o ID'ye sahip en iyi tekil dosyayı al
+        # 3. Seçim: O da yoksa en iyi (best) dosyayı al
+        final_format = f"{format_id}+bestaudio/bestvideo*{format_id}/best"
+    else:
+        final_format = format_id
 
     ydl_opts = {
         'format': final_format,
@@ -115,6 +122,14 @@ def download_processed():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
+        if not os.path.exists(output_path):
+             # Bazı durumlarda dosya uzantısı .mkv kalabiliyor, onu mp4'e zorla
+             for file in os.listdir(DOWNLOAD_FOLDER):
+                 if unique_id in file:
+                     os.rename(os.path.join(DOWNLOAD_FOLDER, file), output_path)
+                     break
+
+        # Filigran (Sadece Premium değilse)
         if not is_premium and os.path.exists(output_path):
             temp_wm = output_path.replace(".mp4", "_wm.mp4")
             cmd = [
